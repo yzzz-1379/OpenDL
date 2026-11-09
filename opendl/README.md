@@ -47,7 +47,7 @@
 命令行方式必须在**包的父目录**执行，否则 `-m opendl` 解析不到包：
 
 ```bat
-cd /d D:\A_Files\文档\deepseek-harness\workspace
+cd /d <项目根目录>
 python -m opendl
 ```
 
