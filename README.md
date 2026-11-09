@@ -60,4 +60,4 @@ python opendl/tests/test_ffmpeg.py     # 没装 ffmpeg 会自动跳过
 
 ## 许可
 
-未指定许可证，作者保留所有权利。
+[MIT](LICENSE) © 2026 Thiry
