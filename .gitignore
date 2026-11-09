@@ -1,0 +1,22 @@
+# 构建产物
+dist/
+build/
+*.spec
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 运行时生成
+OpenDL-data/
+*.log
+*.opendl
+
+# 密钥与本地配置
+token.txt
+settings.json
+
+# 编辑器
+.vscode/
+.idea/
+.DS_Store
