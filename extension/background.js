@@ -134,6 +134,38 @@ async function fetchPlaylist(url) {
   return text.length > HLS_TEXT_LIMIT ? text.slice(0, HLS_TEXT_LIMIT) : text;
 }
 
+/* 主清单常常在页面加载时就请求过，扩展后装/刷新后可能没被捕获到。
+ * 子清单所在目录的上一层通常就放着主清单，主动试几个常见名字，
+ * 并且要求解析结果里确实列出当前子清单，避免抓到不相关的东西。 */
+const MASTER_CANDIDATES = ["master.m3u8", "index.m3u8", "playlist.m3u8", "manifest.m3u8"];
+
+async function findMasterFor(mediaUrl, referer, cookie) {
+  const parseFn = typeof parseM3u8 === "function" ? parseM3u8 : null;
+  if (!parseFn) return null;
+  let base;
+  try {
+    base = new URL(mediaUrl);
+  } catch (e) {
+    return null;
+  }
+  const dir = base.pathname.replace(/\/[^/]*$/, "");        // .../1080p
+  const parent = dir.replace(/\/[^/]*$/, "") + "/";         // .../
+  for (const name of MASTER_CANDIDATES) {
+    const candidate = new URL(parent + name, base.origin).href;
+    if (candidate === mediaUrl) continue;
+    try {
+      await armHeaders(candidate, referer, cookie);
+      const parsed = parseFn(await fetchPlaylist(candidate), candidate);
+      if (!parsed.master) continue;
+      const match = parsed.variants.find((v) => v.url === mediaUrl);
+      if (match) return match;
+    } catch (e) {
+      /* 404 / 403：换下一个候选 */
+    }
+  }
+  return null;
+}
+
 async function enrichHls(tabId, item) {
   if (hlsSeen.has(item.url)) return;
   hlsSeen.add(item.url);
@@ -175,6 +207,18 @@ async function enrichHls(tabId, item) {
     } else if (hlsVariants.has(item.url)) {
       // 本条是子清单，主清单之前解析过，直接取它的分辨率/码率
       source = Object.assign({}, hlsVariants.get(item.url));
+    } else {
+      // 主清单没被捕获到：主动往上找一次，找到了就补上分辨率/码率
+      const found = await findMasterFor(item.url, item.referer, item.cookie);
+      if (found) {
+        source = { width: found.width, height: found.height, bandwidth: found.bandwidth };
+        hlsVariants.set(item.url, {
+          width: found.width,
+          height: found.height,
+          bandwidth: found.bandwidth,
+        });
+        if (hlsVariants.size > 300) hlsVariants.delete(hlsVariants.keys().next().value);
+      }
     }
 
     const info = sumFn(source, playlist);

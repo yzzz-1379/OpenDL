@@ -119,10 +119,13 @@ function buildDetails(item, withVideo = true, target = null) {
   const estimated = Number(item.estBytes) || 0;
   const shownSize = estimated || knownSize;
   let knownDuration = Number(item.duration) || 0;
-  const sizeLine = detailRow(
-    "大小",
-    shownSize ? (estimated ? "≈ " + humanSize(shownSize) : humanSize(shownSize)) : "未知（未捕获到响应头）"
-  );
+  // HLS 清单本身只有几 KB，直接显示会让人以为是视频体积；没有码率时宁可说未知
+  const sizeText = estimated
+    ? `≈ ${humanSize(shownSize)}`
+    : isHlsItem(item)
+      ? "未知（流媒体，缺少码率）"
+      : (shownSize ? humanSize(shownSize) : "未知（未捕获到响应头）");
+  const sizeLine = detailRow("大小", sizeText);
   const durationLine = detailRow("时长", knownDuration ? humanDuration(knownDuration) : "—");
   const resolutionLine = detailRow(
     "分辨率",
@@ -146,8 +149,11 @@ function buildDetails(item, withVideo = true, target = null) {
       bitrateLine.lastElementChild.textContent = `${(Number(item.bandwidth) / 1e6).toFixed(2)} Mbps`;
       return;
     }
+    // 清单文件只有几 KB，用它反推码率只会得到 0.00 kbps，没有意义
     bitrateLine.lastElementChild.textContent =
-      shownSize && knownDuration ? `${((shownSize * 8) / knownDuration / 1000).toFixed(2)} kbps` : "—";
+      shownSize >= 65536 && knownDuration
+        ? `${((shownSize * 8) / knownDuration / 1000).toFixed(2)} kbps`
+        : "—";
   };
   refreshBitrate();
 
