@@ -193,6 +193,13 @@ async function enrichHls(tabId, item) {
           (low, v) => (v.height && (!low || v.height < low) ? v.height : low),
           0
         ),
+        // 让详情页能列出所有画质供选择；上限 20 档，避免异常清单撑爆存储
+        variants: playlist.variants.slice(0, 20).map((v) => ({
+          url: v.url,
+          width: v.width,
+          height: v.height,
+          bandwidth: v.bandwidth,
+        })),
       };
       const best = pickFn(playlist.variants);
       if (best && best.url) {

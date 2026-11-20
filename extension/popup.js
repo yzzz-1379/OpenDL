@@ -27,6 +27,8 @@ const ui = {
   aggregate: false,   // [功能1]
   batch: false,       // [功能2]
   selected: new Set(),
+  // 主清单条目选了哪一档画质：master url -> variant url
+  variantChoice: new Map(),
   filter: "",         // [功能3]
   typeEnabled: new Map(), // [功能3] 类型过滤：type -> bool，缺省为 true
   collapsedTabs: new Set(), // [功能1] 折叠起来的标签页
@@ -127,21 +129,63 @@ function buildDetails(item, withVideo = true, target = null) {
       : (shownSize ? humanSize(shownSize) : "未知（未捕获到响应头）");
   const sizeLine = detailRow("大小", sizeText);
   const durationLine = detailRow("时长", knownDuration ? humanDuration(knownDuration) : "—");
-  const resolutionLine = detailRow(
-    "分辨率",
-    // 主清单是一组档位，标成单一分辨率会和最高档的子清单看起来一模一样
-    item.hlsMaster && item.width && item.height
-      ? `多码率（最高 ${item.width}×${item.height}${item.variantCount ? "，" + item.variantCount + " 档" : ""}）`
-      : item.width && item.height
-        ? `${item.width}×${item.height}`
-        : (item.mime === "audio/*" ? "音频" : "—")
-  );
+  // 主清单带多档画质时给一个下拉框，选中哪档就下哪档
+  const variants = Array.isArray(item.variants) ? item.variants.slice() : [];
+  variants.sort((a, b) => (b.height || 0) - (a.height || 0) || (b.bandwidth || 0) - (a.bandwidth || 0));
+
+  let resolutionLine;
+  let variantSelect = null;
+  if (variants.length > 1) {
+    resolutionLine = detailRow("画质", "");
+    variantSelect = document.createElement("select");
+    variantSelect.className = "variant-select";
+    const chosen = ui.variantChoice.get(item.url) || variants[0].url;
+    for (const variant of variants) {
+      const option = document.createElement("option");
+      option.value = variant.url;
+      const label = variant.height ? `${variant.height}p` : "未知画质";
+      const size = variant.width && variant.height ? `（${variant.width}×${variant.height}）` : "";
+      option.textContent = `${label}${size} · ${((Number(variant.bandwidth) || 0) / 1e6).toFixed(2)} Mbps`;
+      if (variant.url === chosen) option.selected = true;
+      variantSelect.append(option);
+    }
+    resolutionLine.lastElementChild.append(variantSelect);
+  } else {
+    resolutionLine = detailRow(
+      "分辨率",
+      // 主清单是一组档位，标成单一分辨率会和最高档的子清单看起来一模一样
+      item.hlsMaster && item.width && item.height
+        ? `多码率（最高 ${item.width}×${item.height}${item.variantCount ? "，" + item.variantCount + " 档" : ""}）`
+        : item.width && item.height
+          ? `${item.width}×${item.height}`
+          : (item.mime === "audio/*" ? "音频" : "—")
+    );
+  }
+
   const bitrateLine = detailRow(
     "码率",
     item.bandwidth
       ? `${item.hlsMaster ? "最高 " : ""}${(Number(item.bandwidth) / 1e6).toFixed(2)} Mbps`
       : "—"
   );
+
+  // 切换画质：码率与估算体积跟着变，时长不变（同一条流）
+  if (variantSelect) {
+    const applyVariant = (variant) => {
+      if (!variant) return;
+      bitrateLine.lastElementChild.textContent = `${((Number(variant.bandwidth) || 0) / 1e6).toFixed(2)} Mbps`;
+      const bytes = variant.bandwidth && knownDuration
+        ? Math.round((Number(variant.bandwidth) * knownDuration) / 8)
+        : 0;
+      sizeLine.lastElementChild.textContent = bytes ? `≈ ${humanSize(bytes)}` : "未知（流媒体，缺少码率）";
+    };
+    variantSelect.addEventListener("change", (event) => {
+      event.stopPropagation();
+      ui.variantChoice.set(item.url, variantSelect.value);
+      applyVariant(variants.find((v) => v.url === variantSelect.value));
+    });
+    applyVariant(variants.find((v) => v.url === variantSelect.value) || variants[0]);
+  }
   box.append(sizeLine, durationLine, resolutionLine, bitrateLine);
 
   if (item.hlsEncrypted || item.hlsLive) {
@@ -324,7 +368,8 @@ async function sendOne(item, button) {
   button.textContent = "…";
   const reply = await chrome.runtime.sendMessage({
     type: "send",
-    url: item.url,
+    // 主清单选过画质就发那一档的子清单，否则原样发送
+    url: ui.variantChoice.get(item.url) || item.url,
     referer: refererOf(item),
     cookie: item.cookie || "",
   });
