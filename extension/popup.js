@@ -165,7 +165,9 @@ function buildDetails(item, withVideo = true, target = null) {
   const bitrateLine = detailRow(
     "码率",
     item.bandwidth
-      ? `${item.hlsMaster ? "最高 " : ""}${(Number(item.bandwidth) / 1e6).toFixed(2)} Mbps`
+      ? `${item.hlsMaster ? "最高 " : ""}${(Number(item.bandwidth) / 1e6).toFixed(2)} Mbps${
+          item.hlsEstimated ? "（按分片估算）" : ""
+        }`
       : "—"
   );
 

@@ -137,7 +137,37 @@ async function fetchPlaylist(url) {
 /* 主清单常常在页面加载时就请求过，扩展后装/刷新后可能没被捕获到。
  * 子清单所在目录的上一层通常就放着主清单，主动试几个常见名字，
  * 并且要求解析结果里确实列出当前子清单，避免抓到不相关的东西。 */
-const MASTER_CANDIDATES = ["master.m3u8", "index.m3u8", "playlist.m3u8", "manifest.m3u8"];
+const MASTER_CANDIDATES = [
+  "master.m3u8", "index.m3u8", "playlist.m3u8",
+  "manifest.m3u8", "main.m3u8", "stream.m3u8",
+];
+
+/* 拿不到主清单时的兜底：取第一个分片的大小 × 分片数，反推体积与码率。
+ * VBR 下是近似值，但比"未知"有用得多。 */
+async function estimateFromSegments(playlist, referer, cookie) {
+  const segmentUrl = playlist && playlist.firstSegmentUrl;
+  const count = (playlist && playlist.segments) || 0;
+  if (!segmentUrl || count < 1) return 0;
+  try {
+    await armHeaders(segmentUrl, referer, cookie);
+    const response = await fetch(segmentUrl, {
+      credentials: "include",
+      headers: { Range: "bytes=0-0" },
+    });
+    if (!response.ok) return 0;
+    const headers = response.headers;
+    if (!headers || typeof headers.get !== "function") return 0;
+    const range = headers.get("content-range");
+    if (range) {
+      const match = /\/(\d+)\s*$/.exec(range);
+      if (match) return Number(match[1]) * count;
+    }
+    const length = Number(headers.get("content-length")) || 0;
+    return length * count;
+  } catch (e) {
+    return 0;
+  }
+}
 
 async function findMasterFor(mediaUrl, referer, cookie) {
   const parseFn = typeof parseM3u8 === "function" ? parseM3u8 : null;
@@ -150,12 +180,16 @@ async function findMasterFor(mediaUrl, referer, cookie) {
   }
   const dir = base.pathname.replace(/\/[^/]*$/, "");        // .../1080p
   const parent = dir.replace(/\/[^/]*$/, "") + "/";         // .../
-  for (const name of MASTER_CANDIDATES) {
-    const candidate = new URL(parent + name, base.origin).href;
-    if (candidate === mediaUrl) continue;
+  const baseName = base.pathname.split("/").pop();          // video.m3u8
+  // 主清单有时和子清单同名，只是放在上一层目录
+  const candidates = MASTER_CANDIDATES.map((name) => parent + name);
+  if (baseName) candidates.push(parent + baseName);
+  for (const candidate of [...new Set(candidates)]) {
+    const url = new URL(candidate, base.origin).href;
+    if (url === mediaUrl) continue;
     try {
-      await armHeaders(candidate, referer, cookie);
-      const parsed = parseFn(await fetchPlaylist(candidate), candidate);
+      await armHeaders(url, referer, cookie);
+      const parsed = parseFn(await fetchPlaylist(url), url);
       if (!parsed.master) continue;
       const match = parsed.variants.find((v) => v.url === mediaUrl);
       if (match) return match;
@@ -240,6 +274,18 @@ async function enrichHls(tabId, item) {
     }
 
     const info = sumFn(source, playlist);
+
+    // 既没有主清单、也没有码率：用第一个分片的大小 × 分片数反推
+    let estimated = false;
+    if (!info.bandwidth && !info.width && playlist.segments > 1) {
+      const total = await estimateFromSegments(playlist, item.referer, item.cookie);
+      if (total > 0 && info.duration > 0) {
+        info.estBytes = Math.round(total);
+        info.bandwidth = Math.round((total * 8) / info.duration);
+        estimated = true;
+      }
+    }
+
     if (!info.duration && !info.bandwidth && !info.width) return;
 
     mergeItem(tabId, {
@@ -251,6 +297,7 @@ async function enrichHls(tabId, item) {
       estBytes: info.estBytes || 0,
       hlsEncrypted: !!info.encrypted,
       hlsLive: !!info.live,
+      hlsEstimated: estimated,
       ...masterMark,
     });
   } catch (e) {

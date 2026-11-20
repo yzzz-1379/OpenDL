@@ -48,6 +48,7 @@
       encrypted: false,
       targetDuration: 0,
       live: false,
+      firstSegmentUrl: "",
     };
     if (!text || typeof text !== "string") return result;
 
@@ -107,6 +108,9 @@
         pendingVariant.url = absUrl(raw, baseUrl);
         result.variants.push(pendingVariant);
         pendingVariant = null;
+      } else if (!result.firstSegmentUrl) {
+        // 记下第一个分片：拿不到主清单时可以取它的大小来推算总体积
+        result.firstSegmentUrl = absUrl(raw, baseUrl);
       }
     }
 
