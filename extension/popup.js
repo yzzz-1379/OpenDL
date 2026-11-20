@@ -109,10 +109,28 @@ function buildDetails(item, withVideo = true, target = null) {
     "分辨率",
     item.width && item.height ? `${item.width}×${item.height}` : (item.mime === "audio/*" ? "音频" : "—")
   );
-  const bitrateLine = detailRow("码率", "—");
-  box.append(sizeLine, durationLine, resolutionLine, bitrateLine);
+  const bitrateLine = detailRow(
+    "码率",
+    item.bandwidth ? `${(Number(item.bandwidth) / 1e6).toFixed(2)} Mbps` : "—"
+  );
+  const estLine = detailRow(
+    "估算大小",
+    item.estBytes ? humanSize(Number(item.estBytes)) : "—"
+  );
+  box.append(sizeLine, durationLine, resolutionLine, bitrateLine, estLine);
+
+  if (item.hlsEncrypted || item.hlsLive) {
+    const notes = [];
+    if (item.hlsEncrypted) notes.push("AES-128 加密");
+    if (item.hlsLive) notes.push("直播流");
+    box.append(detailRow("备注", notes.join("，")));
+  }
 
   const refreshBitrate = () => {
+    if (item.bandwidth) {
+      bitrateLine.lastElementChild.textContent = `${(Number(item.bandwidth) / 1e6).toFixed(2)} Mbps`;
+      return;
+    }
     bitrateLine.lastElementChild.textContent =
       knownSize && knownDuration ? `${((knownSize * 8) / knownDuration / 1000).toFixed(2)} kbps` : "—";
   };

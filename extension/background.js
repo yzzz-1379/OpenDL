@@ -14,6 +14,14 @@ const MAX_PER_TAB = 300;
 
 const byTab = new Map(); // tabId -> Map(url -> item)
 const pendingHeaders = new Map(); // requestId -> {referer, cookie, userAgent}
+
+// HLS 清单解析放在 m3u8.js（纯函数，可单测）。service worker 是经典脚本，
+// 用 importScripts 引入；测试沙箱里没有它，忽略即可。
+try {
+  if (typeof importScripts === "function") importScripts("m3u8.js");
+} catch (e) {
+  /* 测试环境 */
+}
 let captureError = "";
 
 let settings = {
@@ -55,8 +63,13 @@ function tabStore(tabId) {
 
 function refreshBadge(tabId) {
   const count = tabStore(tabId).size;
-  chrome.action.setBadgeText({ tabId, text: count ? String(count) : "" }).catch(() => {});
-  chrome.action.setBadgeBackgroundColor({ tabId, color: "#1f7a5c" }).catch(() => {});
+  // 徽标只是装饰：任何一处 API 缺失都不能让调用者（捕获流程）抛异常。
+  try {
+    chrome.action.setBadgeText({ tabId, text: count ? String(count) : "" }).catch(() => {});
+    chrome.action.setBadgeBackgroundColor({ tabId, color: "#1f7a5c" }).catch(() => {});
+  } catch (e) {
+    /* 旧版本或缺权限时忽略 */
+  }
 }
 
 function isPlaceholderMime(mime) {
@@ -99,6 +112,87 @@ function isWorthListing(item) {
   if (/mpegurl|dash\+xml|octet-stream/.test(type)) return true;
   if (/\.(mp4|m4s|m4v|m4a|ts|mkv|webm|flv|mov|mp3|aac|ogg|wav|opus|flac|m3u8|mpd)(\?|#|$)/i.test(item.url)) return true;
   return (item.size || 0) >= 1024 * 1024;
+}
+
+function isHls(item) {
+  const mime = (item.mime || "").toLowerCase();
+  return /mpegurl/.test(mime) || /\.m3u8(\?|#|$)/i.test(item.url || "");
+}
+
+/* ---- HLS 清单补充信息：时长 / 分辨率 / 码率 / 估算大小 ---------------- */
+const hlsSeen = new Set();
+// 主清单解析出的「子清单地址 -> 分辨率/码率」；子清单往往先于主清单被捕获，
+// 或者用户只点了子清单那一条，需要靠这张表把信息补到它身上。
+const hlsVariants = new Map();
+const HLS_TEXT_LIMIT = 2 * 1024 * 1024;
+
+async function fetchPlaylist(url) {
+  // credentials: "include" 才会带上 Cookie；Referer 由 armHeaders 的规则补。
+  const response = await fetch(url, { credentials: "include" });
+  if (!response.ok) throw new Error("HTTP " + response.status);
+  const text = await response.text();
+  return text.length > HLS_TEXT_LIMIT ? text.slice(0, HLS_TEXT_LIMIT) : text;
+}
+
+async function enrichHls(tabId, item) {
+  if (hlsSeen.has(item.url)) return;
+  hlsSeen.add(item.url);
+  if (hlsSeen.size > 300) hlsSeen.delete(hlsSeen.values().next().value);
+
+  const parseFn = typeof parseM3u8 === "function" ? parseM3u8 : null;
+  const pickFn = typeof pickBestVariant === "function" ? pickBestVariant : null;
+  const sumFn = typeof summarizeHls === "function" ? summarizeHls : null;
+  if (!parseFn || !pickFn || !sumFn) return;
+
+  try {
+    await armHeaders(item.url, item.referer, item.cookie);
+    let playlist = parseFn(await fetchPlaylist(item.url), item.url);
+    let source = { bandwidth: 0, width: 0, height: 0 };
+
+    // 主清单本身没有时长，要再拉一次选中的子清单。
+    if (playlist.master) {
+      const best = pickFn(playlist.variants);
+      if (best && best.url) {
+        source = best;
+        hlsVariants.set(best.url, {
+          width: best.width,
+          height: best.height,
+          bandwidth: best.bandwidth,
+        });
+        if (hlsVariants.size > 300) hlsVariants.delete(hlsVariants.keys().next().value);
+        // 子清单可能已经被列出来了，顺手把分辨率/码率补上
+        if (tabStore(tabId).has(best.url)) {
+          mergeItem(tabId, {
+            url: best.url,
+            width: best.width,
+            height: best.height,
+            bandwidth: best.bandwidth,
+          });
+        }
+        await armHeaders(best.url, item.referer, item.cookie);
+        playlist = parseFn(await fetchPlaylist(best.url), best.url);
+      }
+    } else if (hlsVariants.has(item.url)) {
+      // 本条是子清单，主清单之前解析过，直接取它的分辨率/码率
+      source = Object.assign({}, hlsVariants.get(item.url));
+    }
+
+    const info = sumFn(source, playlist);
+    if (!info.duration && !info.bandwidth && !info.width) return;
+
+    mergeItem(tabId, {
+      url: item.url,
+      duration: info.duration || 0,
+      width: info.width || 0,
+      height: info.height || 0,
+      bandwidth: info.bandwidth || 0,
+      estBytes: info.estBytes || 0,
+      hlsEncrypted: !!info.encrypted,
+      hlsLive: !!info.live,
+    });
+  } catch (e) {
+    // 拿不到清单（403/跨域）就保持原样，不能因为补信息失败影响列表
+  }
 }
 
 const KIND_BY_TYPE = {
@@ -197,6 +291,9 @@ chrome.webRequest.onResponseStarted.addListener(
       };
       if (!isWorthListing(item)) return;
       mergeItem(details.tabId, item);
+      // m3u8 的响应体只有几 KB，光看响应头识别不出时长/分辨率/码率，
+      // 需要把清单取回来解析（猫抓就是这么做的）。
+      if (isHls(item)) enrichHls(details.tabId, item);
     } catch (e) {
       /* ignore malformed events */
     }
