@@ -180,9 +180,20 @@ async function enrichHls(tabId, item) {
     await armHeaders(item.url, item.referer, item.cookie);
     let playlist = parseFn(await fetchPlaylist(item.url), item.url);
     let source = { bandwidth: 0, width: 0, height: 0 };
+    // 主清单本身是一串码率档位，不是某个具体分辨率；标记出来，
+    // 否则它会和最高档的子清单显示成一模一样。
+    let masterMark = {};
 
     // 主清单本身没有时长，要再拉一次选中的子清单。
     if (playlist.master) {
+      masterMark = {
+        hlsMaster: true,
+        variantCount: playlist.variants.length,
+        lowestHeight: playlist.variants.reduce(
+          (low, v) => (v.height && (!low || v.height < low) ? v.height : low),
+          0
+        ),
+      };
       const best = pickFn(playlist.variants);
       if (best && best.url) {
         source = best;
@@ -233,6 +244,7 @@ async function enrichHls(tabId, item) {
       estBytes: info.estBytes || 0,
       hlsEncrypted: !!info.encrypted,
       hlsLive: !!info.live,
+      ...masterMark,
     });
   } catch (e) {
     // 拿不到清单（403/跨域）就保持原样，不能因为补信息失败影响列表

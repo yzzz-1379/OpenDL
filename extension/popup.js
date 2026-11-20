@@ -129,11 +129,18 @@ function buildDetails(item, withVideo = true, target = null) {
   const durationLine = detailRow("时长", knownDuration ? humanDuration(knownDuration) : "—");
   const resolutionLine = detailRow(
     "分辨率",
-    item.width && item.height ? `${item.width}×${item.height}` : (item.mime === "audio/*" ? "音频" : "—")
+    // 主清单是一组档位，标成单一分辨率会和最高档的子清单看起来一模一样
+    item.hlsMaster && item.width && item.height
+      ? `多码率（最高 ${item.width}×${item.height}${item.variantCount ? "，" + item.variantCount + " 档" : ""}）`
+      : item.width && item.height
+        ? `${item.width}×${item.height}`
+        : (item.mime === "audio/*" ? "音频" : "—")
   );
   const bitrateLine = detailRow(
     "码率",
-    item.bandwidth ? `${(Number(item.bandwidth) / 1e6).toFixed(2)} Mbps` : "—"
+    item.bandwidth
+      ? `${item.hlsMaster ? "最高 " : ""}${(Number(item.bandwidth) / 1e6).toFixed(2)} Mbps`
+      : "—"
   );
   box.append(sizeLine, durationLine, resolutionLine, bitrateLine);
 
