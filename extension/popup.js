@@ -63,9 +63,14 @@ function kindLabel(kind) {
 function humanDuration(seconds) {
   if (!seconds || !isFinite(seconds)) return "—";
   const total = Math.round(seconds);
-  const mm = String(Math.floor(total / 60)).padStart(2, "0");
-  const ss = String(total % 60).padStart(2, "0");
-  return `${mm}:${ss}`;
+  const hh = Math.floor(total / 3600);
+  const mm = Math.floor((total % 3600) / 60);
+  const ss = total % 60;
+  // 超过一小时就用 h:mm:ss，否则 "125:03" 这种读起来很别扭
+  if (hh > 0) {
+    return `${hh}:${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
+  }
+  return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
 
 function playable(url, mime) {
@@ -102,8 +107,15 @@ function buildDetails(item, withVideo = true, target = null) {
   box.append(detailRow("MIME", item.mime || "未知"));
 
   let knownSize = Number(item.size) || 0;
+  // 流媒体的清单只有几 KB，真正有意义的是按码率估算出来的体积；
+  // 两者同时显示会让人以为有两个大小，所以只留一行。
+  const estimated = Number(item.estBytes) || 0;
+  const shownSize = estimated || knownSize;
   let knownDuration = Number(item.duration) || 0;
-  const sizeLine = detailRow("大小", knownSize ? humanSize(knownSize) : "未知（未捕获到响应头）");
+  const sizeLine = detailRow(
+    "大小",
+    shownSize ? humanSize(shownSize) : "未知（未捕获到响应头）"
+  );
   const durationLine = detailRow("时长", knownDuration ? humanDuration(knownDuration) : "—");
   const resolutionLine = detailRow(
     "分辨率",
@@ -113,11 +125,7 @@ function buildDetails(item, withVideo = true, target = null) {
     "码率",
     item.bandwidth ? `${(Number(item.bandwidth) / 1e6).toFixed(2)} Mbps` : "—"
   );
-  const estLine = detailRow(
-    "估算大小",
-    item.estBytes ? humanSize(Number(item.estBytes)) : "—"
-  );
-  box.append(sizeLine, durationLine, resolutionLine, bitrateLine, estLine);
+  box.append(sizeLine, durationLine, resolutionLine, bitrateLine);
 
   if (item.hlsEncrypted || item.hlsLive) {
     const notes = [];
@@ -132,7 +140,7 @@ function buildDetails(item, withVideo = true, target = null) {
       return;
     }
     bitrateLine.lastElementChild.textContent =
-      knownSize && knownDuration ? `${((knownSize * 8) / knownDuration / 1000).toFixed(2)} kbps` : "—";
+      shownSize && knownDuration ? `${((shownSize * 8) / knownDuration / 1000).toFixed(2)} kbps` : "—";
   };
   refreshBitrate();
 
