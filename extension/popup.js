@@ -73,9 +73,16 @@ function humanDuration(seconds) {
   return `${String(mm).padStart(2, "0")}:${String(ss).padStart(2, "0")}`;
 }
 
+function isHlsItem(item) {
+  const mime = ((item && item.mime) || "").toLowerCase();
+  return /mpegurl/.test(mime) || /\.m3u8(\?|#|$)/i.test((item && item.url) || "");
+}
+
 function playable(url, mime) {
   if (!/^https?:/i.test(url)) return false;
-  if (/mpegurl|dash\+xml/i.test(mime || "")) return false;
+  // m3u8 交给 hls.js 播放；没有它时会在 attach 里退回直接播放并提示失败
+  if (isHlsItem({ url, mime })) return true;
+  if (/dash\+xml/i.test(mime || "")) return false;
   return /^(video|audio)\//i.test(mime || "") || /\.(mp4|webm|ogg|m4a|mp3|wav)(\?|#|$)/i.test(url);
 }
 
@@ -176,14 +183,40 @@ function buildDetails(item, withVideo = true, target = null) {
         hint.style.color = "#d29922";
       });
       box.append(video);
+
+      // 桌面 Chromium 没有原生 HLS：<video src="x.m3u8"> 直接报错，
+      // 必须用 hls.js 把分片转成 MSE 喂给播放器。
+      const attach = () => {
+        if (isHlsItem(item) && window.Hls && window.Hls.isSupported()) {
+          try {
+            const hls = new window.Hls({
+              // 分片请求要带上站点的 Cookie，否则防盗链的 CDN 会 403
+              xhrSetup: (xhr) => {
+                xhr.withCredentials = true;
+              },
+            });
+            hls.on(window.Hls.Events.ERROR, (event, data) => {
+              if (!data || !data.fatal) return;
+              hls.destroy();
+              video.remove();
+              hint.textContent = `HLS 预览失败：${data.details || data.type}`;
+              hint.style.color = "#d29922";
+            });
+            hls.loadSource(item.url);
+            hls.attachMedia(video);
+            video.dataset.hls = "1";
+            return;
+          } catch (e) {
+            /* 退回直接播放 */
+          }
+        }
+        video.src = item.url;
+      };
+
       chrome.runtime
         .sendMessage({ type: "arm", url: item.url, referer, cookie: item.cookie || "" })
-        .then(() => {
-          video.src = item.url;
-        })
-        .catch(() => {
-          video.src = item.url;
-        });
+        .then(attach)
+        .catch(attach);
     }
 
     const preview = document.createElement("button");
