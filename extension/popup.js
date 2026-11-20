@@ -121,7 +121,7 @@ function buildDetails(item, withVideo = true, target = null) {
   let knownDuration = Number(item.duration) || 0;
   const sizeLine = detailRow(
     "大小",
-    shownSize ? humanSize(shownSize) : "未知（未捕获到响应头）"
+    shownSize ? (estimated ? "≈ " + humanSize(shownSize) : humanSize(shownSize)) : "未知（未捕获到响应头）"
   );
   const durationLine = detailRow("时长", knownDuration ? humanDuration(knownDuration) : "—");
   const resolutionLine = detailRow(

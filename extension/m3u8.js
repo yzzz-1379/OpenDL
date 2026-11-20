@@ -61,7 +61,11 @@
       if (raw.startsWith("#EXT-X-STREAM-INF:")) {
         result.master = true;
         const attrs = parseAttrs(raw.slice("#EXT-X-STREAM-INF:".length));
-        const bw = parseInt(attrs.BANDWIDTH || attrs["AVERAGE-BANDWIDTH"] || "0", 10) || 0;
+        // BANDWIDTH 是峰值上限，AVERAGE-BANDWIDTH 才是平均值。
+        // 估算体积必须用平均值，否则会明显偏大（实测 5.98 vs 4.4 Mbps 这种差距）。
+        const peak = parseInt(attrs.BANDWIDTH || "0", 10) || 0;
+        const avg = parseInt(attrs["AVERAGE-BANDWIDTH"] || "0", 10) || 0;
+        const bw = avg || peak;
         let width = 0;
         let height = 0;
         if (attrs.RESOLUTION) {
@@ -71,7 +75,14 @@
             height = Number(m[2]);
           }
         }
-        pendingVariant = { bandwidth: bw, width, height, codecs: attrs.CODECS || "", url: "" };
+        pendingVariant = {
+          bandwidth: bw,
+          peakBandwidth: peak,
+          width,
+          height,
+          codecs: attrs.CODECS || "",
+          url: "",
+        };
         continue;
       }
 
